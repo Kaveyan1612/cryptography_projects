@@ -141,7 +141,9 @@ class RSAKeyPanel(QWidget):
         filename, _ = QFileDialog.getSaveFileName(self, "Export Private Key", "private_key.pem")
         if filename:
             try:
-                with open(filename, 'w') as f:
+                # Private key material must not be readable by other users
+                fd = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, 'w') as f:
                     f.write(self.rsa.export_private_key())
                 QMessageBox.information(self, "Success", "Private key exported successfully")
             except Exception as e:

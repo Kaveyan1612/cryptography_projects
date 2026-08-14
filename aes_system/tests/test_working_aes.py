@@ -32,7 +32,7 @@ def test_encryption_returns_data():
     print(f"IV: {iv.hex()}")
     
     # Encrypt
-    ciphertext = aes.encrypt(plaintext, iv)
+    ciphertext, iv = aes.encrypt(plaintext, iv)
     
     # Check if we got data instead of None
     if ciphertext is None:

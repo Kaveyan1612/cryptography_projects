@@ -4,9 +4,9 @@ File encryption/decryption utilities for AES
 """
 
 import os
-from typing import Tuple
 import sys
-import os
+from typing import Tuple
+
 # Ensure we can import from the same directory
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
@@ -46,7 +46,7 @@ class FileCrypto:
     
     @staticmethod
     def encrypt_file(input_file: str, output_file: str, key: bytes, 
-                    mode: AESMode = AESMode.CBC) -> Tuple[bytes, bytes]:
+                    mode: AESMode = AESMode.CBC, iv: bytes = None) -> Tuple[bytes, bytes]:
         """
         Encrypt a file
         
@@ -55,6 +55,7 @@ class FileCrypto:
             output_file: Path to output file
             key: AES key
             mode: AES mode
+            iv: Initialization vector (generated if omitted for non-ECB modes)
         
         Returns:
             Tuple of (key, iv) used for encryption
@@ -64,10 +65,10 @@ class FileCrypto:
             plaintext = f.read()
         
         # Generate IV if needed
-        if mode != AESMode.ECB:
-            iv = FileCrypto.generate_iv()
-        else:
+        if mode == AESMode.ECB:
             iv = None
+        elif iv is None:
+            iv = FileCrypto.generate_iv()
         
         # Encrypt using SimpleAES
         # Convert AESMode to SimpleAESMode
@@ -200,7 +201,9 @@ class FileCrypto:
             key: Key to save
             filename: Output filename
         """
-        with open(filename, 'wb') as f:
+        # Keys must not be world/group readable
+        fd = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'wb') as f:
             f.write(key)
     
     @staticmethod

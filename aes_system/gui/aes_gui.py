@@ -148,10 +148,13 @@ class AESControlPanel(QWidget):
         hex_string = self.key_input.text().strip()
         if hex_string:
             try:
-                self.key = FileCrypto.hex_to_key(hex_string)
-                self.status_label.setText("Key loaded from input")
-            except ValueError:
-                self.status_label.setText("Invalid hex key")
+                key = FileCrypto.hex_to_key(hex_string)
+                if len(key) not in (16, 24, 32):
+                    raise ValueError("Key must be 128, 192, or 256 bits")
+                self.key = key
+                self.status_label.setText(f"Key loaded from input ({len(key) * 8}-bit)")
+            except ValueError as e:
+                self.status_label.setText(f"Invalid key: {e}")
                 self.key = None
     
     def get_aes_mode(self) -> AESMode:
@@ -487,7 +490,8 @@ class FileCryptoPanel(QWidget):
             
             mode = self.control_panel.get_aes_mode()
             key, iv = FileCrypto.encrypt_file(input_file, output_file, 
-                                            self.control_panel.key, mode)
+                                            self.control_panel.key, mode,
+                                            self.control_panel.iv)
             
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(100)

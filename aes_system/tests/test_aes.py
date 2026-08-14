@@ -19,7 +19,7 @@ def test_aes_encryption_decryption():
     print("Testing AES encryption/decryption...")
     
     # Test with AES-128
-    key = b'0123456789abcdef0123456789abcdef'  # 128-bit key
+    key = b'0123456789abcdef'  # 128-bit key
     aes = AES(key, AESMode.CBC)
     plaintext = b'Hello, World! This is a test message.'
     iv = b'0123456789abcdef'
@@ -31,7 +31,7 @@ def test_aes_encryption_decryption():
     print("✓ AES-128 encryption/decryption passed")
     
     # Test with AES-256
-    key_256 = b'0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+    key_256 = b'0123456789abcdef0123456789abcdef'  # 256-bit key
     aes_256 = AES(key_256, AESMode.CBC)
     ciphertext_256 = aes_256.encrypt(plaintext, iv)
     decrypted_256 = aes_256.decrypt(ciphertext_256, iv)
@@ -44,7 +44,7 @@ def test_aes_modes():
     """Test different AES modes"""
     print("\nTesting AES modes...")
     
-    key = b'0123456789abcdef0123456789abcdef'
+    key = b'0123456789abcdef'
     plaintext = b'Test message for different modes.'
     iv = b'0123456789abcdef'
     
@@ -74,9 +74,8 @@ def test_file_encryption():
     
     # Generate key and encrypt
     key = FileCrypto.generate_key(256)
-    iv = FileCrypto.generate_iv()
     
-    FileCrypto.encrypt_file(test_file, encrypted_file, key, AESMode.CBC)
+    _, iv = FileCrypto.encrypt_file(test_file, encrypted_file, key, AESMode.CBC)
     print("✓ File encryption passed")
     
     # Decrypt file
