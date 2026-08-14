@@ -29,7 +29,13 @@ class SimpleAES:
             key: Encryption key (16, 24, or 32 bytes)
             mode: AES operation mode
         """
-        self.key = key
+        if not isinstance(key, (bytes, bytearray)):
+            raise TypeError(f"Key must be bytes, got {type(key).__name__}")
+        
+        if not isinstance(mode, SimpleAESMode):
+            raise TypeError(f"Mode must be a SimpleAESMode, got {mode!r}")
+        
+        self.key = bytes(key)
         self.mode = mode
         self.key_size = len(key) * 8
         
@@ -50,15 +56,15 @@ class SimpleAES:
         Returns:
             Tuple of (ciphertext, iv) where iv is the one used (or generated)
         """
+        if not isinstance(plaintext, (bytes, bytearray)):
+            raise TypeError(f"Plaintext must be bytes, got {type(plaintext).__name__}")
+        
         # Mode-specific encryption requirements
-        if self.mode == SimpleAESMode.CBC and iv is None:
+        if self.mode != SimpleAESMode.ECB and iv is None:
             iv = SimpleFileCrypto.generate_iv()
-        if self.mode == SimpleAESMode.CFB and iv is None:
-            iv = SimpleFileCrypto.generate_iv()
-        if self.mode == SimpleAESMode.OFB and iv is None:
-            iv = SimpleFileCrypto.generate_iv()
-        if self.mode == SimpleAESMode.CTR and iv is None:
-            iv = SimpleFileCrypto.generate_iv()
+        
+        if iv is not None and len(iv) != 16:
+            raise ValueError(f"IV must be 16 bytes, got {len(iv)}")
         
         # Mode-specific encryption logic
         if self.mode == SimpleAESMode.ECB:
@@ -77,8 +83,7 @@ class SimpleAES:
             # CTR: Counter mode
             ciphertext = self._encrypt_ctr(plaintext, iv)
         else:
-            # Fallback to XOR encryption
-            ciphertext = self._xor_encrypt(plaintext, self.key, iv)
+            raise ValueError(f"Unsupported AES mode: {self.mode!r}")
         
         return ciphertext, iv
     
@@ -201,15 +206,23 @@ class SimpleAES:
         Returns:
             Decrypted data
         """
+        if not isinstance(ciphertext, (bytes, bytearray)):
+            raise TypeError(f"Ciphertext must be bytes, got {type(ciphertext).__name__}")
+        
         # Mode-specific decryption requirements
-        if self.mode == SimpleAESMode.CBC and iv is None:
-            raise ValueError("IV required for CBC mode")
-        if self.mode == SimpleAESMode.CFB and iv is None:
-            raise ValueError("IV required for CFB mode")
-        if self.mode == SimpleAESMode.OFB and iv is None:
-            raise ValueError("IV required for OFB mode")
-        if self.mode == SimpleAESMode.CTR and iv is None:
-            raise ValueError("IV required for CTR mode")
+        if self.mode != SimpleAESMode.ECB and iv is None:
+            raise ValueError(f"IV required for {self.mode.name} mode")
+        
+        if iv is not None and len(iv) != 16:
+            raise ValueError(f"IV must be 16 bytes, got {len(iv)}")
+        
+        if not ciphertext:
+            raise ValueError("Ciphertext is empty")
+        
+        if len(ciphertext) % 16 != 0:
+            raise ValueError(
+                f"Ciphertext length must be a multiple of 16 bytes, got {len(ciphertext)}"
+            )
         
         # Mode-specific decryption logic
         if self.mode == SimpleAESMode.ECB:
@@ -228,8 +241,7 @@ class SimpleAES:
             # CTR: Counter mode
             decrypted = self._decrypt_ctr(ciphertext, iv)
         else:
-            # Fallback to XOR decryption
-            decrypted = self._xor_encrypt(ciphertext, self.key, iv)
+            raise ValueError(f"Unsupported AES mode: {self.mode!r}")
         
         # Remove padding
         return self._remove_padding(decrypted)
@@ -388,7 +400,13 @@ class SimpleFileCrypto:
         """Decrypt text"""
         aes = SimpleAES(key, mode)
         plaintext = aes.decrypt(ciphertext, iv)
-        return plaintext.decode('utf-8')
+        try:
+            return plaintext.decode('utf-8')
+        except UnicodeDecodeError as e:
+            raise ValueError(
+                "Decrypted data is not valid UTF-8 text; the key, IV, mode or "
+                "ciphertext is likely incorrect"
+            ) from e
     
     @staticmethod
     def key_to_hex(key: bytes) -> str:
@@ -411,4 +429,7 @@ class SimpleFileCrypto:
         # Handle odd-length hex strings by padding with leading zero
         if len(hex_string) % 2 != 0:
             hex_string = '0' + hex_string
-        return bytes.fromhex(hex_string)
+        try:
+            return bytes.fromhex(hex_string)
+        except ValueError as e:
+            raise ValueError(f"Invalid hex string: {e}") from e

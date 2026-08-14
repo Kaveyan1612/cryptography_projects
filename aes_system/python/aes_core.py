@@ -92,7 +92,13 @@ class AES:
             key: Encryption key (16, 24, or 32 bytes)
             mode: AES operation mode
         """
-        self.key = key
+        if not isinstance(key, (bytes, bytearray)):
+            raise TypeError(f"Key must be bytes, got {type(key).__name__}")
+        
+        if not isinstance(mode, AESMode):
+            raise TypeError(f"Mode must be an AESMode, got {mode!r}")
+        
+        self.key = bytes(key)
         self.mode = mode
         self.key_size = len(key) * 8
         
@@ -302,14 +308,10 @@ class AES:
         # This fixes the None return issue
         if self.mode == AESMode.ECB:
             return self._xor_encrypt(plaintext, self.key)
-        elif self.mode == AESMode.CBC:
+        elif self.mode in (AESMode.CBC, AESMode.CFB, AESMode.OFB, AESMode.CTR):
             return self._xor_encrypt(plaintext, self.key, iv)
-        elif self.mode == AESMode.CFB:
-            return self._xor_encrypt(plaintext, self.key, iv)
-        elif self.mode == AESMode.OFB:
-            return self._xor_encrypt(plaintext, self.key, iv)
-        elif self.mode == AESMode.CTR:
-            return self._xor_encrypt(plaintext, self.key, iv)
+        else:
+            raise ValueError(f"Unsupported AES mode: {self.mode!r}")
     
     def _xor_encrypt(self, data: bytes, key: bytes, iv: bytes = None) -> bytes:
         """Simple XOR encryption to ensure data is returned"""
@@ -411,18 +413,17 @@ class AES:
         if self.mode != AESMode.ECB and iv is None:
             raise ValueError("IV required for this mode")
         
+        if self.mode != AESMode.ECB and len(iv) != 16:
+            raise ValueError("IV must be 16 bytes")
+        
         # For now, use simplified XOR decryption (same as encryption)
         # This ensures data is returned
         if self.mode == AESMode.ECB:
             return self._xor_encrypt(ciphertext, self.key)
-        elif self.mode == AESMode.CBC:
+        elif self.mode in (AESMode.CBC, AESMode.CFB, AESMode.OFB, AESMode.CTR):
             return self._xor_encrypt(ciphertext, self.key, iv)
-        elif self.mode == AESMode.CFB:
-            return self._xor_encrypt(ciphertext, self.key, iv)
-        elif self.mode == AESMode.OFB:
-            return self._xor_encrypt(ciphertext, self.key, iv)
-        elif self.mode == AESMode.CTR:
-            return self._xor_encrypt(ciphertext, self.key, iv)
+        else:
+            raise ValueError(f"Unsupported AES mode: {self.mode!r}")
     
     def _decrypt_ecb(self, ciphertext: bytes) -> bytes:
         """ECB mode decryption"""

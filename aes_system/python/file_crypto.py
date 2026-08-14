@@ -4,9 +4,9 @@ File encryption/decryption utilities for AES
 """
 
 import os
-from typing import Tuple
 import sys
-import os
+from typing import Tuple
+
 # Ensure we can import from the same directory
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
@@ -14,6 +14,22 @@ if current_dir not in sys.path:
 
 from aes_core import AES, AESMode
 from aes_core_simple import SimpleAES, SimpleFileCrypto, SimpleAESMode
+
+
+def _to_simple_mode(mode: AESMode) -> SimpleAESMode:
+    """
+    Translate an AESMode into the equivalent SimpleAESMode
+
+    Raises:
+        TypeError: if mode is not an AESMode
+        ValueError: if the mode has no SimpleAES equivalent
+    """
+    if not isinstance(mode, AESMode):
+        raise TypeError(f"Mode must be an AESMode, got {mode!r}")
+    try:
+        return SimpleAESMode[mode.name]
+    except KeyError as e:
+        raise ValueError(f"Unsupported AES mode: {mode.name}") from e
 
 
 class FileCrypto:
@@ -59,6 +75,8 @@ class FileCrypto:
         Returns:
             Tuple of (key, iv) used for encryption
         """
+        simple_mode = _to_simple_mode(mode)
+        
         # Read input file
         with open(input_file, 'rb') as f:
             plaintext = f.read()
@@ -70,12 +88,10 @@ class FileCrypto:
             iv = None
         
         # Encrypt using SimpleAES
-        # Convert AESMode to SimpleAESMode
-        simple_mode = SimpleAESMode[mode.name]
         aes = SimpleAES(key, simple_mode)
         ciphertext, used_iv = aes.encrypt(plaintext, iv)
         
-        # Write output file
+        # Write output file only once encryption succeeded
         with open(output_file, 'wb') as f:
             f.write(ciphertext)
         
@@ -94,17 +110,17 @@ class FileCrypto:
             mode: AES mode
             iv: Initialization vector (required for most modes)
         """
+        simple_mode = _to_simple_mode(mode)
+        
         # Read input file
         with open(input_file, 'rb') as f:
             ciphertext = f.read()
         
         # Decrypt using SimpleAES
-        # Convert AESMode to SimpleAESMode
-        simple_mode = SimpleAESMode[mode.name]
         aes = SimpleAES(key, simple_mode)
         plaintext = aes.decrypt(ciphertext, iv)
         
-        # Write output file
+        # Write output file only once decryption succeeded
         with open(output_file, 'wb') as f:
             f.write(plaintext)
     
@@ -121,9 +137,7 @@ class FileCrypto:
         Returns:
             Tuple of (ciphertext, iv)
         """
-        # Convert AESMode to SimpleAESMode
-        simple_mode = SimpleAESMode[mode.name]
-        return SimpleFileCrypto.encrypt_text(text, key, simple_mode)
+        return SimpleFileCrypto.encrypt_text(text, key, _to_simple_mode(mode))
     
     @staticmethod
     def decrypt_text(ciphertext: bytes, key: bytes, mode: AESMode = AESMode.CBC, 
@@ -140,9 +154,7 @@ class FileCrypto:
         Returns:
             Decrypted text string
         """
-        # Convert AESMode to SimpleAESMode
-        simple_mode = SimpleAESMode[mode.name]
-        return SimpleFileCrypto.decrypt_text(ciphertext, key, simple_mode, iv)
+        return SimpleFileCrypto.decrypt_text(ciphertext, key, _to_simple_mode(mode), iv)
     
     @staticmethod
     def encrypt_bytes(data: bytes, key: bytes, mode: AESMode = AESMode.CBC) -> Tuple[bytes, bytes]:
@@ -158,14 +170,13 @@ class FileCrypto:
             Tuple of (ciphertext, iv)
         """
         plaintext = data
+        simple_mode = _to_simple_mode(mode)
         
         if mode != AESMode.ECB:
             iv = FileCrypto.generate_iv()
         else:
             iv = None
         
-        # Convert AESMode to SimpleAESMode
-        simple_mode = SimpleAESMode[mode.name]
         aes = SimpleAES(key, simple_mode)
         ciphertext, used_iv = aes.encrypt(plaintext, iv)
         
@@ -186,9 +197,7 @@ class FileCrypto:
         Returns:
             Decrypted bytes
         """
-        # Convert AESMode to SimpleAESMode
-        simple_mode = SimpleAESMode[mode.name]
-        aes = SimpleAES(key, simple_mode)
+        aes = SimpleAES(key, _to_simple_mode(mode))
         return aes.decrypt(ciphertext, iv)
     
     @staticmethod
@@ -215,7 +224,15 @@ class FileCrypto:
             Loaded key
         """
         with open(filename, 'rb') as f:
-            return f.read()
+            key = f.read()
+        
+        if len(key) * 8 not in [128, 192, 256]:
+            raise ValueError(
+                f"Key file '{filename}' does not contain a 128, 192 or 256-bit key "
+                f"(got {len(key)} bytes)"
+            )
+        
+        return key
     
     @staticmethod
     def key_to_hex(key: bytes) -> str:

@@ -11,6 +11,25 @@ from typing import Tuple, Optional
 from enum import Enum
 
 
+def _nonzero_random_bytes(length: int) -> bytes:
+    """
+    Generate random bytes that contain no zero byte (PKCS#1 v1.5 filler)
+    
+    Args:
+        length: Number of bytes to generate
+    
+    Returns:
+        Random non-zero bytes
+    """
+    if length < 0:
+        raise ValueError("Length must be non-negative")
+    
+    filler = bytearray()
+    while len(filler) < length:
+        filler.extend(b for b in os.urandom(length - len(filler)) if b != 0)
+    return bytes(filler)
+
+
 class RSAKeySize(Enum):
     """RSA key sizes"""
     RSA_1024 = 1024
@@ -48,6 +67,16 @@ class RSA:
         self.dP = 0     # d mod (p-1)
         self.dQ = 0     # d mod (q-1)
         self.qInv = 0    # q^(-1) mod p
+    
+    def _require_keypair(self) -> None:
+        """
+        Ensure a key pair has been generated
+        
+        Raises:
+            ValueError: if generate_keypair() has not been called yet
+        """
+        if self.n == 0 or self.d == 0:
+            raise ValueError("No RSA key pair available; call generate_keypair() first")
     
     def generate_keypair(self) -> Tuple[Tuple[int, int], Tuple[int, int, int, int, int]]:
         """
@@ -185,9 +214,13 @@ class RSA:
             Ciphertext as integer
         """
         if public_key is None:
+            self._require_keypair()
             n, e = self.n, self.e
         else:
             n, e = public_key
+        
+        if plaintext < 0:
+            raise ValueError("Plaintext must be non-negative")
         
         if plaintext >= n:
             raise ValueError("Plaintext must be less than modulus")
@@ -206,9 +239,13 @@ class RSA:
             Plaintext as integer
         """
         if private_key is None:
+            self._require_keypair()
             n, d, p, q, dP, dQ, qInv = self.n, self.d, self.p, self.q, self.dP, self.dQ, self.qInv
         else:
             n, d, p, q, dP, dQ, qInv = private_key
+        
+        if ciphertext < 0:
+            raise ValueError("Ciphertext must be non-negative")
         
         if ciphertext >= n:
             raise ValueError("Ciphertext must be less than modulus")
@@ -284,6 +321,7 @@ class RSA:
             Encrypted data
         """
         if public_key is None:
+            self._require_keypair()
             n, e = self.n, self.e
         else:
             n, e = public_key
@@ -292,14 +330,20 @@ class RSA:
         k = (n.bit_length() + 7) // 8
         max_block_size = k - 11  # PKCS#1 v1.5 padding overhead
         
+        if max_block_size <= 0:
+            raise ValueError(
+                f"Modulus is too small for PKCS#1 v1.5 padding ({k} bytes, needs > 11)"
+            )
+        
         encrypted_data = b''
         
         for i in range(0, len(data), max_block_size):
             block = data[i:i+max_block_size]
             
-            # PKCS#1 v1.5 padding
+            # PKCS#1 v1.5 padding: filler bytes must all be non-zero so that the
+            # 0x00 separator stays unambiguous
             padding = b'\x00\x02'
-            padding += os.urandom(k - len(block) - 3)
+            padding += _nonzero_random_bytes(k - len(block) - 3)
             padding += b'\x00'
             padded_block = padding + block
             
@@ -325,12 +369,19 @@ class RSA:
             Decrypted data
         """
         if private_key is None:
+            self._require_keypair()
             n = self.n
         else:
             n = private_key[0]
         
         # Calculate block size
         k = (n.bit_length() + 7) // 8
+        
+        if len(data) % k != 0:
+            raise ValueError(
+                f"Ciphertext length ({len(data)} bytes) is not a multiple of the "
+                f"modulus size ({k} bytes)"
+            )
         
         decrypted_data = b''
         
@@ -387,6 +438,7 @@ class RSA:
             PEM formatted public key
         """
         if public_key is None:
+            self._require_keypair()
             n, e = self.n, self.e
         else:
             n, e = public_key
@@ -409,6 +461,8 @@ class RSA:
         Returns:
             PEM formatted private key
         """
+        self._require_keypair()
+        
         n_bytes = self.n.to_bytes((self.n.bit_length() + 7) // 8, byteorder='big')
         d_bytes = self.d.to_bytes((self.d.bit_length() + 7) // 8, byteorder='big')
         p_bytes = self.p.to_bytes((self.p.bit_length() + 7) // 8, byteorder='big')

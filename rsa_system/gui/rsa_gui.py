@@ -4,8 +4,10 @@ RSA Cryptography GUI
 PyQt5-based graphical interface for RSA operations
 """
 
+import logging
 import sys
 import os
+import traceback
 from typing import Tuple
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QLineEdit, 
@@ -17,7 +19,11 @@ from PyQt5.QtGui import QFont
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from python.rsa_core import RSA, RSAKeySize
+from python.rsa_core import RSA, RSABenchmark, RSAKeySize
+
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 
 class RSAKeyPanel(QWidget):
@@ -114,6 +120,10 @@ class RSAKeyPanel(QWidget):
             self.key_status.setText(f"Keys generated! Modulus: {key_info['modulus_bits']} bits")
             
         except Exception as e:
+            logger.exception("Key generation failed")
+            self.rsa = None
+            self.public_key = None
+            self.private_key = None
             QMessageBox.critical(self, "Error", f"Key generation failed: {str(e)}")
             self.key_status.setText("Key generation failed")
     
@@ -129,7 +139,11 @@ class RSAKeyPanel(QWidget):
                 with open(filename, 'w') as f:
                     f.write(self.rsa.export_public_key(self.public_key))
                 QMessageBox.information(self, "Success", "Public key exported successfully")
+            except OSError as e:
+                logger.exception("Public key export to %s failed", filename)
+                QMessageBox.critical(self, "Error", f"Cannot write '{filename}': {str(e)}")
             except Exception as e:
+                logger.exception("Public key export failed")
                 QMessageBox.critical(self, "Error", f"Export failed: {str(e)}")
     
     def export_private_key(self):
@@ -144,7 +158,11 @@ class RSAKeyPanel(QWidget):
                 with open(filename, 'w') as f:
                     f.write(self.rsa.export_private_key())
                 QMessageBox.information(self, "Success", "Private key exported successfully")
+            except OSError as e:
+                logger.exception("Private key export to %s failed", filename)
+                QMessageBox.critical(self, "Error", f"Cannot write '{filename}': {str(e)}")
             except Exception as e:
+                logger.exception("Private key export failed")
                 QMessageBox.critical(self, "Error", f"Export failed: {str(e)}")
     
     def is_ready(self) -> bool:
@@ -220,6 +238,7 @@ class RSAEncryptionPanel(QWidget):
             self.output_text.setText(result)
             
         except Exception as e:
+            logger.exception("RSA encryption failed")
             QMessageBox.critical(self, "Error", f"Encryption failed: {str(e)}")
     
     def decrypt_data(self):
@@ -234,16 +253,31 @@ class RSAEncryptionPanel(QWidget):
             return
         
         try:
-            data = bytes.fromhex(hex_text)
+            data = bytes.fromhex(''.join(hex_text.split()))
+        except ValueError as e:
+            QMessageBox.warning(self, "Error", f"Input is not valid hex data: {str(e)}")
+            return
+        
+        try:
             decrypted = self.key_panel.rsa.decrypt_bytes(data, self.key_panel.private_key)
-            
-            result = f"Decrypted data:\n{decrypted.decode('utf-8')}\n\n"
-            result += f"Data length: {len(decrypted)} bytes"
-            
-            self.output_text.setText(result)
-            
         except Exception as e:
+            logger.exception("RSA decryption failed")
             QMessageBox.critical(self, "Error", f"Decryption failed: {str(e)}")
+            return
+        
+        try:
+            text = decrypted.decode('utf-8')
+        except UnicodeDecodeError as e:
+            logger.warning("Decrypted data is not valid UTF-8: %s", e)
+            QMessageBox.critical(self, "Error",
+                                 "Decrypted data is not valid UTF-8 text; the ciphertext "
+                                 "or private key is likely incorrect")
+            return
+        
+        result = f"Decrypted data:\n{text}\n\n"
+        result += f"Data length: {len(decrypted)} bytes"
+        
+        self.output_text.setText(result)
 
 
 class RSASignaturePanel(QWidget):
@@ -324,6 +358,7 @@ class RSASignaturePanel(QWidget):
             self.output_text.setText(result)
             
         except Exception as e:
+            logger.exception("Signing failed")
             QMessageBox.critical(self, "Error", f"Signing failed: {str(e)}")
     
     def verify_signature(self):
@@ -340,7 +375,12 @@ class RSASignaturePanel(QWidget):
             return
         
         try:
-            signature = int(signature_hex, 16)
+            signature = int(''.join(signature_hex.split()), 16)
+        except ValueError:
+            QMessageBox.warning(self, "Error", "Signature must be a hexadecimal value")
+            return
+        
+        try:
             is_valid = self.key_panel.rsa.verify(message, signature, self.key_panel.public_key)
             
             if is_valid:
@@ -351,6 +391,7 @@ class RSASignaturePanel(QWidget):
                 self.output_text.setStyleSheet("color: red;")
             
         except Exception as e:
+            logger.exception("Signature verification failed")
             QMessageBox.critical(self, "Error", f"Verification failed: {str(e)}")
             self.output_text.setStyleSheet("color: black;")
 
@@ -428,8 +469,6 @@ class RSABenchmarkPanel(QWidget):
     def benchmark_key_generation(self):
         """Benchmark key generation"""
         try:
-            from python.rsa_core import RSABenchmark
-            
             key_size = int(self.bench_key_size_combo.currentText().split()[0])
             iterations = self.iterations_spin.value()
             
@@ -451,8 +490,10 @@ class RSABenchmarkPanel(QWidget):
             self.results_text.setText(result_text)
             
         except Exception as e:
-            self.progress_bar.setVisible(False)
+            logger.exception("Key generation benchmark failed")
             QMessageBox.critical(self, "Error", f"Benchmark failed: {str(e)}")
+        finally:
+            self.progress_bar.setVisible(False)
     
     def benchmark_encryption(self):
         """Benchmark encryption"""
@@ -461,8 +502,6 @@ class RSABenchmarkPanel(QWidget):
             return
         
         try:
-            from python.rsa_core import RSABenchmark
-            
             message_size = 32  # 32 bytes
             iterations = self.iterations_spin.value()
             
@@ -484,8 +523,10 @@ class RSABenchmarkPanel(QWidget):
             self.results_text.setText(result_text)
             
         except Exception as e:
-            self.progress_bar.setVisible(False)
+            logger.exception("Encryption benchmark failed")
             QMessageBox.critical(self, "Error", f"Benchmark failed: {str(e)}")
+        finally:
+            self.progress_bar.setVisible(False)
     
     def benchmark_decryption(self):
         """Benchmark decryption"""
@@ -494,8 +535,6 @@ class RSABenchmarkPanel(QWidget):
             return
         
         try:
-            from python.rsa_core import RSABenchmark
-            
             message_size = 32  # 32 bytes
             iterations = self.iterations_spin.value()
             
@@ -517,8 +556,10 @@ class RSABenchmarkPanel(QWidget):
             self.results_text.setText(result_text)
             
         except Exception as e:
-            self.progress_bar.setVisible(False)
+            logger.exception("Decryption benchmark failed")
             QMessageBox.critical(self, "Error", f"Benchmark failed: {str(e)}")
+        finally:
+            self.progress_bar.setVisible(False)
 
 
 class RSAMainWindow(QMainWindow):
@@ -602,9 +643,25 @@ class RSAMainWindow(QMainWindow):
                           "Version 1.0")
 
 
+def _install_exception_hook():
+    """Surface unhandled exceptions instead of letting Qt discard them"""
+    def hook(exc_type, exc_value, exc_tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            return
+        logger.critical("Unhandled exception",
+                        exc_info=(exc_type, exc_value, exc_tb))
+        details = ''.join(traceback.format_exception_only(exc_type, exc_value)).strip()
+        QMessageBox.critical(None, "Unexpected Error",
+                             f"An unexpected error occurred:\n\n{details}")
+    
+    sys.excepthook = hook
+
+
 def main():
     """Main function"""
     app = QApplication(sys.argv)
+    _install_exception_hook()
     
     # Set application style
     app.setStyle('Fusion')
