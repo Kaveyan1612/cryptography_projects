@@ -4,11 +4,22 @@ RSA Cryptography System Implementation
 Complete RSA with key generation, encryption, decryption, signatures
 """
 
+import hashlib
 import os
 import random
-import hashlib
-from typing import Tuple, Optional
+import sys
 from enum import Enum
+from pathlib import Path
+from typing import Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from common.pathsetup import add_project_paths
+
+add_project_paths()
+
+from common import benchmark
+from common.intutil import byte_length, bytes_to_int, int_to_bytes
 
 
 class RSAKeySize(Enum):
@@ -173,6 +184,18 @@ class RSA:
             raise ValueError("Modular inverse does not exist")
         return x % m
     
+    def _public_key(self, public_key: Optional[Tuple[int, int]]) -> Tuple[int, int]:
+        """Return the given public key or this instance's key material"""
+        if public_key is None:
+            return self.n, self.e
+        return public_key
+    
+    def _private_key(self, private_key: Optional[Tuple[int, ...]]) -> Tuple[int, ...]:
+        """Return the given private key or this instance's key material"""
+        if private_key is None:
+            return (self.n, self.d, self.p, self.q, self.dP, self.dQ, self.qInv)
+        return private_key
+    
     def encrypt(self, plaintext: int, public_key: Optional[Tuple[int, int]] = None) -> int:
         """
         Encrypt using RSA
@@ -184,10 +207,7 @@ class RSA:
         Returns:
             Ciphertext as integer
         """
-        if public_key is None:
-            n, e = self.n, self.e
-        else:
-            n, e = public_key
+        n, e = self._public_key(public_key)
         
         if plaintext >= n:
             raise ValueError("Plaintext must be less than modulus")
@@ -205,10 +225,7 @@ class RSA:
         Returns:
             Plaintext as integer
         """
-        if private_key is None:
-            n, d, p, q, dP, dQ, qInv = self.n, self.d, self.p, self.q, self.dP, self.dQ, self.qInv
-        else:
-            n, d, p, q, dP, dQ, qInv = private_key
+        n, d, p, q, dP, dQ, qInv = self._private_key(private_key)
         
         if ciphertext >= n:
             raise ValueError("Ciphertext must be less than modulus")
@@ -235,8 +252,7 @@ class RSA:
         """
         # Hash the message
         hash_algorithm = "SHA-256"
-        hash_obj = hashlib.sha256(message.encode())
-        message_hash = int.from_bytes(hash_obj.digest(), byteorder='big')
+        message_hash = self._message_hash(message, hash_algorithm)
         
         # Sign the hash
         signature = self.decrypt(message_hash, private_key)
@@ -257,7 +273,16 @@ class RSA:
         Returns:
             True if signature is valid, False otherwise
         """
-        # Hash the message
+        message_hash = self._message_hash(message, hash_algorithm)
+        
+        # Decrypt signature
+        decrypted_hash = self.encrypt(signature, public_key)
+        
+        return decrypted_hash == message_hash
+    
+    @staticmethod
+    def _message_hash(message: str, hash_algorithm: str) -> int:
+        """Hash a message with the named algorithm and return it as an integer"""
         if hash_algorithm == "SHA-256":
             hash_obj = hashlib.sha256(message.encode())
         elif hash_algorithm == "SHA-512":
@@ -265,12 +290,7 @@ class RSA:
         else:
             raise ValueError("Unsupported hash algorithm")
         
-        message_hash = int.from_bytes(hash_obj.digest(), byteorder='big')
-        
-        # Decrypt signature
-        decrypted_hash = self.encrypt(signature, public_key)
-        
-        return decrypted_hash == message_hash
+        return bytes_to_int(hash_obj.digest())
     
     def encrypt_bytes(self, data: bytes, public_key: Optional[Tuple[int, int]] = None) -> bytes:
         """
@@ -283,13 +303,10 @@ class RSA:
         Returns:
             Encrypted data
         """
-        if public_key is None:
-            n, e = self.n, self.e
-        else:
-            n, e = public_key
+        n, e = self._public_key(public_key)
         
         # Calculate maximum block size
-        k = (n.bit_length() + 7) // 8
+        k = byte_length(n)
         max_block_size = k - 11  # PKCS#1 v1.5 padding overhead
         
         encrypted_data = b''
@@ -304,12 +321,10 @@ class RSA:
             padded_block = padding + block
             
             # Convert to integer and encrypt
-            m = int.from_bytes(padded_block, byteorder='big')
-            c = self.encrypt(m, public_key)
+            c = self.encrypt(bytes_to_int(padded_block), public_key)
             
             # Convert back to bytes
-            encrypted_block = c.to_bytes(k, byteorder='big')
-            encrypted_data += encrypted_block
+            encrypted_data += int_to_bytes(c, k)
         
         return encrypted_data
     
@@ -324,13 +339,10 @@ class RSA:
         Returns:
             Decrypted data
         """
-        if private_key is None:
-            n = self.n
-        else:
-            n = private_key[0]
+        n = self._private_key(private_key)[0]
         
         # Calculate block size
-        k = (n.bit_length() + 7) // 8
+        k = byte_length(n)
         
         decrypted_data = b''
         
@@ -338,11 +350,10 @@ class RSA:
             block = data[i:i+k]
             
             # Convert to integer and decrypt
-            c = int.from_bytes(block, byteorder='big')
-            m = self.decrypt(c, private_key)
+            m = self.decrypt(bytes_to_int(block), private_key)
             
             # Convert back to bytes
-            padded_block = m.to_bytes(k, byteorder='big')
+            padded_block = int_to_bytes(m, k)
             
             # Remove PKCS#1 v1.5 padding
             if padded_block[0] != 0x00 or padded_block[1] != 0x02:
@@ -386,21 +397,20 @@ class RSA:
         Returns:
             PEM formatted public key
         """
-        if public_key is None:
-            n, e = self.n, self.e
-        else:
-            n, e = public_key
+        n, e = self._public_key(public_key)
         
         # Simple PEM format (not full X.509)
-        n_bytes = n.to_bytes((n.bit_length() + 7) // 8, byteorder='big')
-        e_bytes = e.to_bytes((e.bit_length() + 7) // 8, byteorder='big')
-        
         pem = "-----BEGIN RSA PUBLIC KEY-----\n"
-        pem += f"Modulus: {n_bytes.hex()}\n"
-        pem += f"Exponent: {e_bytes.hex()}\n"
+        pem += f"Modulus: {self._hex(n)}\n"
+        pem += f"Exponent: {self._hex(e)}\n"
         pem += "-----END RSA PUBLIC KEY-----\n"
         
         return pem
+    
+    @staticmethod
+    def _hex(value: int) -> str:
+        """Render an integer as big-endian hex for the PEM-style exports"""
+        return int_to_bytes(value).hex()
     
     def export_private_key(self) -> str:
         """
@@ -409,16 +419,11 @@ class RSA:
         Returns:
             PEM formatted private key
         """
-        n_bytes = self.n.to_bytes((self.n.bit_length() + 7) // 8, byteorder='big')
-        d_bytes = self.d.to_bytes((self.d.bit_length() + 7) // 8, byteorder='big')
-        p_bytes = self.p.to_bytes((self.p.bit_length() + 7) // 8, byteorder='big')
-        q_bytes = self.q.to_bytes((self.q.bit_length() + 7) // 8, byteorder='big')
-        
         pem = "-----BEGIN RSA PRIVATE KEY-----\n"
-        pem += f"Modulus: {n_bytes.hex()}\n"
-        pem += f"Private Exponent: {d_bytes.hex()}\n"
-        pem += f"Prime p: {p_bytes.hex()}\n"
-        pem += f"Prime q: {q_bytes.hex()}\n"
+        pem += f"Modulus: {self._hex(self.n)}\n"
+        pem += f"Private Exponent: {self._hex(self.d)}\n"
+        pem += f"Prime p: {self._hex(self.p)}\n"
+        pem += f"Prime q: {self._hex(self.q)}\n"
         pem += "-----END RSA PRIVATE KEY-----\n"
         
         return pem
@@ -455,24 +460,10 @@ class RSABenchmark:
         Returns:
             Benchmark results
         """
-        import time
+        results = benchmark.time_operation(
+            lambda: RSA(key_size).generate_keypair(), iterations)
         
-        times = []
-        for _ in range(iterations):
-            rsa = RSA(key_size)
-            start_time = time.time()
-            rsa.generate_keypair()
-            end_time = time.time()
-            times.append(end_time - start_time)
-        
-        return {
-            'key_size': key_size,
-            'iterations': iterations,
-            'average_time': sum(times) / len(times),
-            'min_time': min(times),
-            'max_time': max(times),
-            'total_time': sum(times)
-        }
+        return {'key_size': key_size, **results}
     
     @staticmethod
     def benchmark_encryption(rsa: RSA, message_size: int, iterations: int = 100) -> dict:
@@ -487,26 +478,13 @@ class RSABenchmark:
         Returns:
             Benchmark results
         """
-        import time
-        
         message = os.urandom(message_size)
         public_key, _ = rsa.generate_keypair()
         
-        times = []
-        for _ in range(iterations):
-            start_time = time.time()
-            rsa.encrypt_bytes(message, public_key)
-            end_time = time.time()
-            times.append(end_time - start_time)
+        results = benchmark.time_operation(
+            lambda: rsa.encrypt_bytes(message, public_key), iterations)
         
-        return {
-            'message_size': message_size,
-            'iterations': iterations,
-            'average_time': sum(times) / len(times),
-            'min_time': min(times),
-            'max_time': max(times),
-            'total_time': sum(times)
-        }
+        return {'message_size': message_size, **results}
     
     @staticmethod
     def benchmark_decryption(rsa: RSA, message_size: int, iterations: int = 100) -> dict:
@@ -521,24 +499,11 @@ class RSABenchmark:
         Returns:
             Benchmark results
         """
-        import time
-        
         message = os.urandom(message_size)
         public_key, private_key = rsa.generate_keypair()
         encrypted = rsa.encrypt_bytes(message, public_key)
         
-        times = []
-        for _ in range(iterations):
-            start_time = time.time()
-            rsa.decrypt_bytes(encrypted, private_key)
-            end_time = time.time()
-            times.append(end_time - start_time)
+        results = benchmark.time_operation(
+            lambda: rsa.decrypt_bytes(encrypted, private_key), iterations)
         
-        return {
-            'message_size': message_size,
-            'iterations': iterations,
-            'average_time': sum(times) / len(times),
-            'min_time': min(times),
-            'max_time': max(times),
-            'total_time': sum(times)
-        }
+        return {'message_size': message_size, **results}

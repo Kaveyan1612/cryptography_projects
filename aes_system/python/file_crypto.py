@@ -3,15 +3,17 @@
 File encryption/decryption utilities for AES
 """
 
-import os
-from typing import Tuple
 import sys
-import os
-# Ensure we can import from the same directory
-current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
-    sys.path.insert(0, current_dir)
+from pathlib import Path
+from typing import Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from common.pathsetup import add_project_paths
+
+add_project_paths()
+
+from common import keyutil
 from aes_core import AES, AESMode
 from aes_core_simple import SimpleAES, SimpleFileCrypto, SimpleAESMode
 
@@ -30,8 +32,7 @@ class FileCrypto:
         Returns:
             Random key
         """
-        if key_size not in [128, 192, 256]:
-            raise ValueError("Key size must be 128, 192, or 256 bits")
+        keyutil.validate_key_size(key_size)
         return SimpleFileCrypto.generate_key(key_size)
     
     @staticmethod
@@ -43,6 +44,16 @@ class FileCrypto:
             Random 16-byte IV
         """
         return SimpleFileCrypto.generate_iv()
+    
+    @staticmethod
+    def _cipher(key: bytes, mode: AESMode) -> SimpleAES:
+        """Build a SimpleAES cipher for the equivalent simplified mode"""
+        return SimpleAES(key, SimpleAESMode[mode.name])
+    
+    @staticmethod
+    def _iv_for_mode(mode: AESMode) -> Optional[bytes]:
+        """Generate an IV for every mode except ECB"""
+        return None if mode == AESMode.ECB else FileCrypto.generate_iv()
     
     @staticmethod
     def encrypt_file(input_file: str, output_file: str, key: bytes, 
@@ -59,25 +70,9 @@ class FileCrypto:
         Returns:
             Tuple of (key, iv) used for encryption
         """
-        # Read input file
-        with open(input_file, 'rb') as f:
-            plaintext = f.read()
-        
-        # Generate IV if needed
-        if mode != AESMode.ECB:
-            iv = FileCrypto.generate_iv()
-        else:
-            iv = None
-        
-        # Encrypt using SimpleAES
-        # Convert AESMode to SimpleAESMode
-        simple_mode = SimpleAESMode[mode.name]
-        aes = SimpleAES(key, simple_mode)
-        ciphertext, used_iv = aes.encrypt(plaintext, iv)
-        
-        # Write output file
-        with open(output_file, 'wb') as f:
-            f.write(ciphertext)
+        plaintext = FileCrypto._read_file(input_file)
+        ciphertext, used_iv = FileCrypto.encrypt_bytes(plaintext, key, mode)
+        FileCrypto._write_file(output_file, ciphertext)
         
         return key, used_iv
     
@@ -94,19 +89,9 @@ class FileCrypto:
             mode: AES mode
             iv: Initialization vector (required for most modes)
         """
-        # Read input file
-        with open(input_file, 'rb') as f:
-            ciphertext = f.read()
-        
-        # Decrypt using SimpleAES
-        # Convert AESMode to SimpleAESMode
-        simple_mode = SimpleAESMode[mode.name]
-        aes = SimpleAES(key, simple_mode)
-        plaintext = aes.decrypt(ciphertext, iv)
-        
-        # Write output file
-        with open(output_file, 'wb') as f:
-            f.write(plaintext)
+        ciphertext = FileCrypto._read_file(input_file)
+        plaintext = FileCrypto.decrypt_bytes(ciphertext, key, mode, iv)
+        FileCrypto._write_file(output_file, plaintext)
     
     @staticmethod
     def encrypt_text(text: str, key: bytes, mode: AESMode = AESMode.CBC) -> Tuple[bytes, bytes]:
@@ -121,9 +106,7 @@ class FileCrypto:
         Returns:
             Tuple of (ciphertext, iv)
         """
-        # Convert AESMode to SimpleAESMode
-        simple_mode = SimpleAESMode[mode.name]
-        return SimpleFileCrypto.encrypt_text(text, key, simple_mode)
+        return SimpleFileCrypto.encrypt_text(text, key, SimpleAESMode[mode.name])
     
     @staticmethod
     def decrypt_text(ciphertext: bytes, key: bytes, mode: AESMode = AESMode.CBC, 
@@ -140,9 +123,8 @@ class FileCrypto:
         Returns:
             Decrypted text string
         """
-        # Convert AESMode to SimpleAESMode
-        simple_mode = SimpleAESMode[mode.name]
-        return SimpleFileCrypto.decrypt_text(ciphertext, key, simple_mode, iv)
+        return SimpleFileCrypto.decrypt_text(
+            ciphertext, key, SimpleAESMode[mode.name], iv)
     
     @staticmethod
     def encrypt_bytes(data: bytes, key: bytes, mode: AESMode = AESMode.CBC) -> Tuple[bytes, bytes]:
@@ -157,19 +139,8 @@ class FileCrypto:
         Returns:
             Tuple of (ciphertext, iv)
         """
-        plaintext = data
-        
-        if mode != AESMode.ECB:
-            iv = FileCrypto.generate_iv()
-        else:
-            iv = None
-        
-        # Convert AESMode to SimpleAESMode
-        simple_mode = SimpleAESMode[mode.name]
-        aes = SimpleAES(key, simple_mode)
-        ciphertext, used_iv = aes.encrypt(plaintext, iv)
-        
-        return ciphertext, used_iv
+        return FileCrypto._cipher(key, mode).encrypt(
+            data, FileCrypto._iv_for_mode(mode))
     
     @staticmethod
     def decrypt_bytes(ciphertext: bytes, key: bytes, mode: AESMode = AESMode.CBC, 
@@ -186,10 +157,19 @@ class FileCrypto:
         Returns:
             Decrypted bytes
         """
-        # Convert AESMode to SimpleAESMode
-        simple_mode = SimpleAESMode[mode.name]
-        aes = SimpleAES(key, simple_mode)
-        return aes.decrypt(ciphertext, iv)
+        return FileCrypto._cipher(key, mode).decrypt(ciphertext, iv)
+    
+    @staticmethod
+    def _read_file(filename: str) -> bytes:
+        """Read a file in binary mode"""
+        with open(filename, 'rb') as f:
+            return f.read()
+    
+    @staticmethod
+    def _write_file(filename: str, data: bytes) -> None:
+        """Write a file in binary mode"""
+        with open(filename, 'wb') as f:
+            f.write(data)
     
     @staticmethod
     def save_key(key: bytes, filename: str) -> None:
@@ -200,8 +180,7 @@ class FileCrypto:
             key: Key to save
             filename: Output filename
         """
-        with open(filename, 'wb') as f:
-            f.write(key)
+        FileCrypto._write_file(filename, key)
     
     @staticmethod
     def load_key(filename: str) -> bytes:
@@ -214,8 +193,7 @@ class FileCrypto:
         Returns:
             Loaded key
         """
-        with open(filename, 'rb') as f:
-            return f.read()
+        return FileCrypto._read_file(filename)
     
     @staticmethod
     def key_to_hex(key: bytes) -> str:

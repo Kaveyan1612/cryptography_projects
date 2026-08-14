@@ -15,9 +15,15 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from python.rsa_core import RSA, RSAKeySize
+# Make the repository root and the implementation packages importable
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from common import benchmark, guiutil
+from common.pathsetup import add_project_paths
+
+add_project_paths()
+
+from python.rsa_core import RSA, RSABenchmark, RSAKeySize
 
 
 class RSAKeyPanel(QWidget):
@@ -99,7 +105,7 @@ class RSAKeyPanel(QWidget):
     def generate_keypair(self):
         """Generate RSA key pair"""
         try:
-            key_size = int(self.key_size_combo.currentText().split()[0])
+            key_size = guiutil.key_size_from_combo(self.key_size_combo)
             self.rsa = RSA(key_size)
             
             self.key_status.setText("Generating keys...")
@@ -114,38 +120,29 @@ class RSAKeyPanel(QWidget):
             self.key_status.setText(f"Keys generated! Modulus: {key_info['modulus_bits']} bits")
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Key generation failed: {str(e)}")
+            guiutil.show_error(self, f"Key generation failed: {str(e)}")
             self.key_status.setText("Key generation failed")
     
     def export_public_key(self):
         """Export public key to file"""
-        if not self.public_key:
-            QMessageBox.warning(self, "Error", "No public key to export")
-            return
-        
-        filename, _ = QFileDialog.getSaveFileName(self, "Export Public Key", "public_key.pem")
-        if filename:
-            try:
-                with open(filename, 'w') as f:
-                    f.write(self.rsa.export_public_key(self.public_key))
-                QMessageBox.information(self, "Success", "Public key exported successfully")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Export failed: {str(e)}")
+        self._export_key(self.public_key, "Public key", "public_key.pem",
+                         lambda: self.rsa.export_public_key(self.public_key))
     
     def export_private_key(self):
         """Export private key to file"""
-        if not self.private_key:
-            QMessageBox.warning(self, "Error", "No private key to export")
+        self._export_key(self.private_key, "Private key", "private_key.pem",
+                         lambda: self.rsa.export_private_key())
+    
+    def _export_key(self, key, label: str, default_name: str, render) -> None:
+        """Prompt for a path and write the rendered key material to it"""
+        if not key:
+            guiutil.show_warning(self, f"No {label.lower()} to export")
             return
         
-        filename, _ = QFileDialog.getSaveFileName(self, "Export Private Key", "private_key.pem")
+        filename, _ = QFileDialog.getSaveFileName(
+            self, f"Export {label}", default_name)
         if filename:
-            try:
-                with open(filename, 'w') as f:
-                    f.write(self.rsa.export_private_key())
-                QMessageBox.information(self, "Success", "Private key exported successfully")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Export failed: {str(e)}")
+            guiutil.save_text_to_file(self, filename, render(), label)
     
     def is_ready(self) -> bool:
         """Check if keys are ready"""
@@ -202,12 +199,12 @@ class RSAEncryptionPanel(QWidget):
     def encrypt_data(self):
         """Encrypt data"""
         if not self.key_panel.is_ready():
-            QMessageBox.warning(self, "Error", "Please generate key pair first")
+            guiutil.show_warning(self, "Please generate key pair first")
             return
         
         text = self.input_text.toPlainText()
         if not text:
-            QMessageBox.warning(self, "Error", "Please enter text to encrypt")
+            guiutil.show_warning(self, "Please enter text to encrypt")
             return
         
         try:
@@ -220,17 +217,17 @@ class RSAEncryptionPanel(QWidget):
             self.output_text.setText(result)
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Encryption failed: {str(e)}")
+            guiutil.show_error(self, f"Encryption failed: {str(e)}")
     
     def decrypt_data(self):
         """Decrypt data"""
         if not self.key_panel.is_ready():
-            QMessageBox.warning(self, "Error", "Please generate key pair first")
+            guiutil.show_warning(self, "Please generate key pair first")
             return
         
         hex_text = self.input_text.toPlainText().strip()
         if not hex_text:
-            QMessageBox.warning(self, "Error", "Please enter hex data to decrypt")
+            guiutil.show_warning(self, "Please enter hex data to decrypt")
             return
         
         try:
@@ -243,7 +240,7 @@ class RSAEncryptionPanel(QWidget):
             self.output_text.setText(result)
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Decryption failed: {str(e)}")
+            guiutil.show_error(self, f"Decryption failed: {str(e)}")
 
 
 class RSASignaturePanel(QWidget):
@@ -307,12 +304,12 @@ class RSASignaturePanel(QWidget):
     def sign_message(self):
         """Sign message"""
         if not self.key_panel.is_ready():
-            QMessageBox.warning(self, "Error", "Please generate key pair first")
+            guiutil.show_warning(self, "Please generate key pair first")
             return
         
         message = self.message_text.toPlainText()
         if not message:
-            QMessageBox.warning(self, "Error", "Please enter message to sign")
+            guiutil.show_warning(self, "Please enter message to sign")
             return
         
         try:
@@ -324,19 +321,19 @@ class RSASignaturePanel(QWidget):
             self.output_text.setText(result)
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Signing failed: {str(e)}")
+            guiutil.show_error(self, f"Signing failed: {str(e)}")
     
     def verify_signature(self):
         """Verify signature"""
         if not self.key_panel.is_ready():
-            QMessageBox.warning(self, "Error", "Please generate key pair first")
+            guiutil.show_warning(self, "Please generate key pair first")
             return
         
         message = self.message_text.toPlainText()
         signature_hex = self.signature_input.text().strip()
         
         if not message or not signature_hex:
-            QMessageBox.warning(self, "Error", "Please enter message and signature")
+            guiutil.show_warning(self, "Please enter message and signature")
             return
         
         try:
@@ -351,7 +348,7 @@ class RSASignaturePanel(QWidget):
                 self.output_text.setStyleSheet("color: red;")
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Verification failed: {str(e)}")
+            guiutil.show_error(self, f"Verification failed: {str(e)}")
             self.output_text.setStyleSheet("color: black;")
 
 
@@ -427,98 +424,47 @@ class RSABenchmarkPanel(QWidget):
     
     def benchmark_key_generation(self):
         """Benchmark key generation"""
-        try:
-            from python.rsa_core import RSABenchmark
-            
-            key_size = int(self.bench_key_size_combo.currentText().split()[0])
-            iterations = self.iterations_spin.value()
-            
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setRange(0, 0)
-            
-            results = RSABenchmark.benchmark_key_generation(key_size, iterations)
-            
-            self.progress_bar.setRange(0, 100)
-            self.progress_bar.setValue(100)
-            
-            result_text = f"Key Generation Benchmark ({key_size} bits)\n"
-            result_text += f"Iterations: {iterations}\n"
-            result_text += f"Average Time: {results['average_time']:.4f}s\n"
-            result_text += f"Min Time: {results['min_time']:.4f}s\n"
-            result_text += f"Max Time: {results['max_time']:.4f}s\n"
-            result_text += f"Total Time: {results['total_time']:.4f}s\n"
-            
-            self.results_text.setText(result_text)
-            
-        except Exception as e:
-            self.progress_bar.setVisible(False)
-            QMessageBox.critical(self, "Error", f"Benchmark failed: {str(e)}")
+        key_size = guiutil.key_size_from_combo(self.bench_key_size_combo)
+        iterations = self.iterations_spin.value()
+        
+        self._run_benchmark(
+            lambda: RSABenchmark.benchmark_key_generation(key_size, iterations),
+            f"Key Generation Benchmark ({key_size} bits)", precision=4,
+            require_keys=False)
     
     def benchmark_encryption(self):
         """Benchmark encryption"""
-        if not self.key_panel.is_ready():
-            QMessageBox.warning(self, "Error", "Please generate key pair first")
-            return
+        message_size = 32  # 32 bytes
+        iterations = self.iterations_spin.value()
         
-        try:
-            from python.rsa_core import RSABenchmark
-            
-            message_size = 32  # 32 bytes
-            iterations = self.iterations_spin.value()
-            
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setRange(0, 0)
-            
-            results = RSABenchmark.benchmark_encryption(self.key_panel.rsa, message_size, iterations)
-            
-            self.progress_bar.setRange(0, 100)
-            self.progress_bar.setValue(100)
-            
-            result_text = f"Encryption Benchmark ({message_size} bytes)\n"
-            result_text += f"Iterations: {iterations}\n"
-            result_text += f"Average Time: {results['average_time']:.6f}s\n"
-            result_text += f"Min Time: {results['min_time']:.6f}s\n"
-            result_text += f"Max Time: {results['max_time']:.6f}s\n"
-            result_text += f"Total Time: {results['total_time']:.6f}s\n"
-            
-            self.results_text.setText(result_text)
-            
-        except Exception as e:
-            self.progress_bar.setVisible(False)
-            QMessageBox.critical(self, "Error", f"Benchmark failed: {str(e)}")
+        self._run_benchmark(
+            lambda: RSABenchmark.benchmark_encryption(
+                self.key_panel.rsa, message_size, iterations),
+            f"Encryption Benchmark ({message_size} bytes)", precision=6)
     
     def benchmark_decryption(self):
         """Benchmark decryption"""
-        if not self.key_panel.is_ready():
-            QMessageBox.warning(self, "Error", "Please generate key pair first")
+        message_size = 32  # 32 bytes
+        iterations = self.iterations_spin.value()
+        
+        self._run_benchmark(
+            lambda: RSABenchmark.benchmark_decryption(
+                self.key_panel.rsa, message_size, iterations),
+            f"Decryption Benchmark ({message_size} bytes)", precision=6)
+    
+    def _run_benchmark(self, operation, title: str, precision: int,
+                       require_keys: bool = True) -> None:
+        """Run a benchmark behind the progress bar and show its results"""
+        if require_keys and not self.key_panel.is_ready():
+            guiutil.show_warning(self, "Please generate key pair first")
             return
         
-        try:
-            from python.rsa_core import RSABenchmark
-            
-            message_size = 32  # 32 bytes
-            iterations = self.iterations_spin.value()
-            
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setRange(0, 0)
-            
-            results = RSABenchmark.benchmark_decryption(self.key_panel.rsa, message_size, iterations)
-            
-            self.progress_bar.setRange(0, 100)
-            self.progress_bar.setValue(100)
-            
-            result_text = f"Decryption Benchmark ({message_size} bytes)\n"
-            result_text += f"Iterations: {iterations}\n"
-            result_text += f"Average Time: {results['average_time']:.6f}s\n"
-            result_text += f"Min Time: {results['min_time']:.6f}s\n"
-            result_text += f"Max Time: {results['max_time']:.6f}s\n"
-            result_text += f"Total Time: {results['total_time']:.6f}s\n"
-            
-            self.results_text.setText(result_text)
-            
-        except Exception as e:
-            self.progress_bar.setVisible(False)
-            QMessageBox.critical(self, "Error", f"Benchmark failed: {str(e)}")
+        results = guiutil.run_with_progress(
+            self, self.progress_bar, operation, "Benchmark failed")
+        
+        if results is not None:
+            self.results_text.setText(
+                benchmark.format_results(title, results, precision))
 
 
 class RSAMainWindow(QMainWindow):

@@ -4,10 +4,21 @@ AES Encryption/Decryption Core Implementation
 Implements AES-128, AES-192, AES-256 with various modes
 """
 
-import os
 import struct
-from typing import List, Tuple, Union
+import sys
 from enum import Enum
+from pathlib import Path
+from typing import List
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from common.pathsetup import add_project_paths
+
+add_project_paths()
+
+from common import keyutil
+from common.blockutil import (BLOCK_SIZE, pkcs7_pad, split_blocks, xor_bytes,
+                             xor_with_keystream)
 
 
 class AESMode(Enum):
@@ -94,10 +105,7 @@ class AES:
         """
         self.key = key
         self.mode = mode
-        self.key_size = len(key) * 8
-        
-        if self.key_size not in [128, 192, 256]:
-            raise ValueError("Key must be 128, 192, or 256 bits")
+        self.key_size = keyutil.validate_key_size(len(key) * 8)
         
         self.rounds = {128: 10, 192: 12, 256: 14}[self.key_size]
         self.round_keys = self._key_expansion()
@@ -225,7 +233,7 @@ class AES:
     
     def _encrypt_block(self, plaintext: bytes) -> bytes:
         """Encrypt a single 16-byte block"""
-        if len(plaintext) != 16:
+        if len(plaintext) != BLOCK_SIZE:
             raise ValueError("Block must be 16 bytes")
         
         # Convert to state matrix
@@ -252,7 +260,7 @@ class AES:
     
     def _decrypt_block(self, ciphertext: bytes) -> bytes:
         """Decrypt a single 16-byte block"""
-        if len(ciphertext) != 16:
+        if len(ciphertext) != BLOCK_SIZE:
             raise ValueError("Block must be 16 bytes")
         
         # Convert to state matrix
@@ -291,59 +299,33 @@ class AES:
         if self.mode != AESMode.ECB and iv is None:
             raise ValueError("IV required for this mode")
         
-        if self.mode != AESMode.ECB and len(iv) != 16:
+        if self.mode != AESMode.ECB and len(iv) != BLOCK_SIZE:
             raise ValueError("IV must be 16 bytes")
         
-        # PKCS#7 padding
-        padding_length = 16 - (len(plaintext) % 16)
-        plaintext = plaintext + bytes([padding_length] * padding_length)
+        plaintext = pkcs7_pad(plaintext)
         
         # For now, use simplified XOR encryption to ensure it returns data
         # This fixes the None return issue
-        if self.mode == AESMode.ECB:
-            return self._xor_encrypt(plaintext, self.key)
-        elif self.mode == AESMode.CBC:
-            return self._xor_encrypt(plaintext, self.key, iv)
-        elif self.mode == AESMode.CFB:
-            return self._xor_encrypt(plaintext, self.key, iv)
-        elif self.mode == AESMode.OFB:
-            return self._xor_encrypt(plaintext, self.key, iv)
-        elif self.mode == AESMode.CTR:
-            return self._xor_encrypt(plaintext, self.key, iv)
+        return self._xor_encrypt(plaintext, self.key,
+                                 None if self.mode == AESMode.ECB else iv)
     
     def _xor_encrypt(self, data: bytes, key: bytes, iv: bytes = None) -> bytes:
         """Simple XOR encryption to ensure data is returned"""
-        result = bytearray(len(data))
-        key_expanded = (key * ((len(data) // len(key)) + 1))[:len(data)]
-        
-        if iv is not None:
-            iv_expanded = (iv * ((len(data) // len(iv)) + 1))[:len(data)]
-            for i in range(len(data)):
-                result[i] = data[i] ^ key_expanded[i] ^ iv_expanded[i]
-        else:
-            for i in range(len(data)):
-                result[i] = data[i] ^ key_expanded[i]
-        
-        return bytes(result)
+        return xor_with_keystream(data, key, iv)
     
     def _encrypt_ecb(self, plaintext: bytes) -> bytes:
         """ECB mode encryption"""
-        ciphertext = b''
-        for i in range(0, len(plaintext), 16):
-            block = plaintext[i:i+16]
-            ciphertext += self._encrypt_block(block)
-        return ciphertext
+        return b''.join(self._encrypt_block(block)
+                        for block in split_blocks(plaintext))
     
     def _encrypt_cbc(self, plaintext: bytes, iv: bytes) -> bytes:
         """CBC mode encryption"""
         ciphertext = b''
         prev_block = iv
         
-        for i in range(0, len(plaintext), 16):
-            block = plaintext[i:i+16]
+        for block in split_blocks(plaintext):
             # XOR with previous ciphertext block
-            block = bytes([block[j] ^ prev_block[j] for j in range(16)])
-            encrypted_block = self._encrypt_block(block)
+            encrypted_block = self._encrypt_block(xor_bytes(block, prev_block))
             ciphertext += encrypted_block
             prev_block = encrypted_block
         
@@ -354,13 +336,11 @@ class AES:
         ciphertext = b''
         prev_block = iv
         
-        for i in range(0, len(plaintext), 16):
-            encrypted_iv = self._encrypt_block(prev_block)
-            block = plaintext[i:i+16]
+        for block in split_blocks(plaintext):
             # XOR plaintext with encrypted IV
-            encrypted_block = bytes([block[j] ^ encrypted_iv[j] for j in range(len(block))])
+            encrypted_block = xor_bytes(block, self._encrypt_block(prev_block))
             ciphertext += encrypted_block
-            prev_block = encrypted_block.ljust(16, b'\x00')
+            prev_block = encrypted_block.ljust(BLOCK_SIZE, b'\x00')
         
         return iv + ciphertext
     
@@ -369,12 +349,10 @@ class AES:
         ciphertext = b''
         prev_block = iv
         
-        for i in range(0, len(plaintext), 16):
+        for block in split_blocks(plaintext):
             encrypted_iv = self._encrypt_block(prev_block)
-            block = plaintext[i:i+16]
             # XOR plaintext with encrypted IV
-            encrypted_block = bytes([block[j] ^ encrypted_iv[j] for j in range(len(block))])
-            ciphertext += encrypted_block
+            ciphertext += xor_bytes(block, encrypted_iv)
             prev_block = encrypted_iv
         
         return iv + ciphertext
@@ -384,18 +362,18 @@ class AES:
         ciphertext = b''
         counter = iv
         
-        for i in range(0, len(plaintext), 16):
-            encrypted_counter = self._encrypt_block(counter)
-            block = plaintext[i:i+16]
+        for block in split_blocks(plaintext):
             # XOR plaintext with encrypted counter
-            encrypted_block = bytes([block[j] ^ encrypted_counter[j] for j in range(len(block))])
-            ciphertext += encrypted_block
-            # Increment counter
-            counter = struct.pack('>QQ', 
-                                struct.unpack('>QQ', counter)[0] + 1,
-                                struct.unpack('>QQ', counter)[1])
+            ciphertext += xor_bytes(block, self._encrypt_block(counter))
+            counter = self._increment_counter(counter)
         
         return iv + ciphertext
+    
+    @staticmethod
+    def _increment_counter(counter: bytes) -> bytes:
+        """Increment the high half of a 16-byte counter block"""
+        high, low = struct.unpack('>QQ', counter)
+        return struct.pack('>QQ', high + 1, low)
     
     def decrypt(self, ciphertext: bytes, iv: bytes = None) -> bytes:
         """
@@ -413,36 +391,22 @@ class AES:
         
         # For now, use simplified XOR decryption (same as encryption)
         # This ensures data is returned
-        if self.mode == AESMode.ECB:
-            return self._xor_encrypt(ciphertext, self.key)
-        elif self.mode == AESMode.CBC:
-            return self._xor_encrypt(ciphertext, self.key, iv)
-        elif self.mode == AESMode.CFB:
-            return self._xor_encrypt(ciphertext, self.key, iv)
-        elif self.mode == AESMode.OFB:
-            return self._xor_encrypt(ciphertext, self.key, iv)
-        elif self.mode == AESMode.CTR:
-            return self._xor_encrypt(ciphertext, self.key, iv)
+        return self._xor_encrypt(ciphertext, self.key,
+                                 None if self.mode == AESMode.ECB else iv)
     
     def _decrypt_ecb(self, ciphertext: bytes) -> bytes:
         """ECB mode decryption"""
-        plaintext = b''
-        for i in range(0, len(ciphertext), 16):
-            block = ciphertext[i:i+16]
-            plaintext += self._decrypt_block(block)
-        return plaintext
+        return b''.join(self._decrypt_block(block)
+                        for block in split_blocks(ciphertext))
     
     def _decrypt_cbc(self, ciphertext: bytes, iv: bytes) -> bytes:
         """CBC mode decryption"""
         plaintext = b''
         prev_block = iv
         
-        for i in range(0, len(ciphertext), 16):
-            block = ciphertext[i:i+16]
-            decrypted_block = self._decrypt_block(block)
-            # XOR with previous ciphertext block
-            decrypted_block = bytes([decrypted_block[j] ^ prev_block[j] for j in range(16)])
-            plaintext += decrypted_block
+        for block in split_blocks(ciphertext):
+            # XOR the decrypted block with the previous ciphertext block
+            plaintext += xor_bytes(self._decrypt_block(block), prev_block)
             prev_block = block
         
         return plaintext
@@ -452,13 +416,10 @@ class AES:
         plaintext = b''
         prev_block = iv
         
-        for i in range(0, len(ciphertext), 16):
-            encrypted_iv = self._encrypt_block(prev_block)
-            block = ciphertext[i:i+16]
+        for block in split_blocks(ciphertext):
             # XOR ciphertext with encrypted IV
-            decrypted_block = bytes([block[j] ^ encrypted_iv[j] for j in range(len(block))])
-            plaintext += decrypted_block
-            prev_block = block.ljust(16, b'\x00')
+            plaintext += xor_bytes(block, self._encrypt_block(prev_block))
+            prev_block = block.ljust(BLOCK_SIZE, b'\x00')
         
         return plaintext
     
@@ -467,12 +428,10 @@ class AES:
         plaintext = b''
         prev_block = iv
         
-        for i in range(0, len(ciphertext), 16):
+        for block in split_blocks(ciphertext):
             encrypted_iv = self._encrypt_block(prev_block)
-            block = ciphertext[i:i+16]
             # XOR ciphertext with encrypted IV
-            decrypted_block = bytes([block[j] ^ encrypted_iv[j] for j in range(len(block))])
-            plaintext += decrypted_block
+            plaintext += xor_bytes(block, encrypted_iv)
             prev_block = encrypted_iv
         
         return plaintext
@@ -482,15 +441,9 @@ class AES:
         plaintext = b''
         counter = iv
         
-        for i in range(0, len(ciphertext), 16):
-            encrypted_counter = self._encrypt_block(counter)
-            block = ciphertext[i:i+16]
+        for block in split_blocks(ciphertext):
             # XOR ciphertext with encrypted counter
-            decrypted_block = bytes([block[j] ^ encrypted_counter[j] for j in range(len(block))])
-            plaintext += decrypted_block
-            # Increment counter
-            counter = struct.pack('>QQ', 
-                                struct.unpack('>QQ', counter)[0] + 1,
-                                struct.unpack('>QQ', counter)[1])
+            plaintext += xor_bytes(block, self._encrypt_block(counter))
+            counter = self._increment_counter(counter)
         
         return plaintext

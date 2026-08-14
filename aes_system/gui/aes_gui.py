@@ -4,9 +4,10 @@ AES Encryption/Decryption GUI
 PyQt5-based graphical interface for AES operations
 """
 
-import sys
 import os
-from typing import Tuple
+import sys
+import traceback
+from typing import Optional, Tuple
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QLineEdit, 
                              QTextEdit, QComboBox, QGroupBox, QFileDialog,
@@ -15,13 +16,13 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Make the repository root and the implementation packages importable
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-# Add python directory to path
-python_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'python')
-if python_dir not in sys.path:
-    sys.path.insert(0, python_dir)
+from common import guiutil
+from common.pathsetup import add_project_paths
+
+add_project_paths()
 
 try:
     from aes_core import AES, AESMode
@@ -132,7 +133,7 @@ class AESControlPanel(QWidget):
     
     def generate_key(self):
         """Generate random AES key"""
-        key_size = int(self.key_size_combo.currentText().split()[0])
+        key_size = guiutil.key_size_from_combo(self.key_size_combo)
         self.key = FileCrypto.generate_key(key_size)
         self.key_display.setText(FileCrypto.key_to_hex(self.key))
         self.status_label.setText(f"Generated {key_size}-bit key")
@@ -224,12 +225,12 @@ class TextCryptoPanel(QWidget):
         """Encrypt text"""
         try:
             if not self.control_panel.is_ready():
-                QMessageBox.warning(self, "Error", "Please configure key and IV first")
+                guiutil.show_warning(self, "Please configure key and IV first")
                 return
             
             text = self.input_text.toPlainText()
             if not text:
-                QMessageBox.warning(self, "Error", "Please enter text to encrypt")
+                guiutil.show_warning(self, "Please enter text to encrypt")
                 return
             
             mode = self.control_panel.get_aes_mode()
@@ -250,20 +251,19 @@ class TextCryptoPanel(QWidget):
             self.output_text.setText(result)
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Encryption failed: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            guiutil.show_error(self, f"Encryption failed: {str(e)}",
+                               print_traceback=True)
     
     def decrypt_text(self):
         """Decrypt text with improved copy-paste handling"""
         try:
             if not self.control_panel.is_ready():
-                QMessageBox.warning(self, "Error", "Please configure key and IV first")
+                guiutil.show_warning(self, "Please configure key and IV first")
                 return
             
             hex_text = self.input_text.toPlainText().strip()
             if not hex_text:
-                QMessageBox.warning(self, "Error", "Please enter hex ciphertext to decrypt")
+                guiutil.show_warning(self, "Please enter hex ciphertext to decrypt")
                 return
             
             # Handle various input formats
@@ -306,14 +306,15 @@ class TextCryptoPanel(QWidget):
             
             # Validate we have ciphertext
             if not ciphertext_hex:
-                QMessageBox.warning(self, "Error", "No valid ciphertext found in input")
+                guiutil.show_warning(self, "No valid ciphertext found in input")
                 return
             
             # Convert hex to bytes with improved error handling
             try:
                 ciphertext = FileCrypto.hex_to_key(ciphertext_hex)
             except Exception as e:
-                QMessageBox.warning(self, "Error", f"Invalid hex format in ciphertext: {str(e)}")
+                guiutil.show_warning(
+                    self, f"Invalid hex format in ciphertext: {str(e)}")
                 return
             
             # Handle IV
@@ -322,7 +323,8 @@ class TextCryptoPanel(QWidget):
                 try:
                     iv = FileCrypto.hex_to_key(iv_hex)
                 except Exception as e:
-                    QMessageBox.warning(self, "Error", f"Invalid hex format in IV: {str(e)}")
+                    guiutil.show_warning(
+                        self, f"Invalid hex format in IV: {str(e)}")
                     return
             else:
                 # Use current IV from control panel
@@ -332,7 +334,9 @@ class TextCryptoPanel(QWidget):
             
             # Ensure IV is set for modes that require it
             if mode != AESMode.ECB and iv is None:
-                QMessageBox.warning(self, "Error", f"IV is required for {mode.name} mode. Please configure IV first.")
+                guiutil.show_warning(
+                    self,
+                    f"IV is required for {mode.name} mode. Please configure IV first.")
                 return
             
             # Decrypt
@@ -340,9 +344,8 @@ class TextCryptoPanel(QWidget):
             self.output_text.setText(f"Decrypted text:\n{plaintext}")
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Decryption failed: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            guiutil.show_error(self, f"Decryption failed: {str(e)}",
+                               print_traceback=True)
 
 
 class FileCryptoPanel(QWidget):
@@ -412,7 +415,8 @@ class FileCryptoPanel(QWidget):
             if filename:
                 # Validate file path
                 if not os.path.exists(filename):
-                    QMessageBox.warning(self, "Error", f"Selected file does not exist: {filename}")
+                    guiutil.show_warning(
+                        self, f"Selected file does not exist: {filename}")
                     return
                 
                 self.input_file_edit.setText(filename)
@@ -422,10 +426,10 @@ class FileCryptoPanel(QWidget):
                         base, ext = os.path.splitext(filename)
                         self.output_file_edit.setText(base + "_encrypted" + ext)
                     except Exception as e:
-                        QMessageBox.warning(self, "Error", f"Failed to generate output filename: {str(e)}")
+                        guiutil.show_warning(
+                            self, f"Failed to generate output filename: {str(e)}")
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to browse file: {str(e)}")
-            import traceback
+            guiutil.show_warning(self, f"Failed to browse file: {str(e)}")
             traceback.print_exc()
     
     def browse_output_file(self):
@@ -433,157 +437,54 @@ class FileCryptoPanel(QWidget):
         try:
             filename, _ = QFileDialog.getSaveFileName(self, "Select Output File")
             if filename:
-                # Validate directory
-                output_dir = os.path.dirname(filename)
-                if output_dir and not os.path.exists(output_dir):
-                    try:
-                        os.makedirs(output_dir, exist_ok=True)
-                    except Exception as e:
-                        QMessageBox.warning(self, "Error", f"Cannot create output directory: {str(e)}")
-                        return
+                if not guiutil.ensure_directory(self, filename):
+                    return
                 
                 self.output_file_edit.setText(filename)
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to browse file: {str(e)}")
-            import traceback
+            guiutil.show_warning(self, f"Failed to browse file: {str(e)}")
             traceback.print_exc()
     
     def encrypt_file(self):
         """Encrypt file with improved error handling"""
-        if not self.control_panel.is_ready():
-            QMessageBox.warning(self, "Error", "Please configure key and IV first")
+        input_file, output_file = self._validated_paths()
+        if input_file is None:
             return
         
-        input_file = self.input_file_edit.text()
-        output_file = self.output_file_edit.text()
-        
-        if not input_file or not output_file:
-            QMessageBox.warning(self, "Error", "Please select input and output files")
-            return
-        
-        # Validate input file exists
-        if not os.path.exists(input_file):
-            QMessageBox.warning(self, "Error", f"Input file does not exist: {input_file}")
-            return
-        
-        # Validate input file is readable
-        if not os.access(input_file, os.R_OK):
-            QMessageBox.warning(self, "Error", f"Cannot read input file: {input_file}")
-            return
-        
-        # Validate output directory exists and is writable
-        output_dir = os.path.dirname(output_file)
-        if output_dir and not os.path.exists(output_dir):
-            try:
-                os.makedirs(output_dir, exist_ok=True)
-            except Exception as e:
-                QMessageBox.warning(self, "Error", f"Cannot create output directory: {str(e)}")
-                return
-        
-        try:
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setRange(0, 0)  # Indeterminate progress
-            self.status_label.setText("Encrypting...")
-            
-            mode = self.control_panel.get_aes_mode()
-            key, iv = FileCrypto.encrypt_file(input_file, output_file, 
-                                            self.control_panel.key, mode)
-            
-            self.progress_bar.setRange(0, 100)
-            self.progress_bar.setValue(100)
-            self.status_label.setText("Encryption complete")
-            
-            QMessageBox.information(self, "Success", "File encrypted successfully")
-            
-        except PermissionError as e:
-            self.progress_bar.setVisible(False)
-            self.status_label.setText("Encryption failed")
-            QMessageBox.critical(self, "Error", f"Permission denied: {str(e)}")
-        except FileNotFoundError as e:
-            self.progress_bar.setVisible(False)
-            self.status_label.setText("Encryption failed")
-            QMessageBox.critical(self, "Error", f"File not found: {str(e)}")
-        except OSError as e:
-            self.progress_bar.setVisible(False)
-            self.status_label.setText("Encryption failed")
-            QMessageBox.critical(self, "Error", f"System error: {str(e)}")
-        except Exception as e:
-            self.progress_bar.setVisible(False)
-            self.status_label.setText("Encryption failed")
-            QMessageBox.critical(self, "Error", f"Encryption failed: {str(e)}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            self.progress_bar.setVisible(False)
+        mode = self.control_panel.get_aes_mode()
+        guiutil.run_file_operation(
+            self, self.progress_bar, self.status_label,
+            lambda: FileCrypto.encrypt_file(input_file, output_file,
+                                            self.control_panel.key, mode),
+            "Encrypting", "Encryption", "File encrypted successfully")
     
     def decrypt_file(self):
         """Decrypt file with improved error handling"""
-        if not self.control_panel.is_ready():
-            QMessageBox.warning(self, "Error", "Please configure key and IV first")
+        input_file, output_file = self._validated_paths()
+        if input_file is None:
             return
+        
+        mode = self.control_panel.get_aes_mode()
+        iv = self.control_panel.iv
+        guiutil.run_file_operation(
+            self, self.progress_bar, self.status_label,
+            lambda: FileCrypto.decrypt_file(input_file, output_file,
+                                            self.control_panel.key, mode, iv),
+            "Decrypting", "Decryption", "File decrypted successfully")
+    
+    def _validated_paths(self) -> Tuple[Optional[str], Optional[str]]:
+        """Return the selected input/output paths once key and files check out"""
+        if not self.control_panel.is_ready():
+            guiutil.show_warning(self, "Please configure key and IV first")
+            return None, None
         
         input_file = self.input_file_edit.text()
         output_file = self.output_file_edit.text()
         
-        if not input_file or not output_file:
-            QMessageBox.warning(self, "Error", "Please select input and output files")
-            return
+        if not guiutil.validate_file_paths(self, input_file, output_file):
+            return None, None
         
-        # Validate input file exists
-        if not os.path.exists(input_file):
-            QMessageBox.warning(self, "Error", f"Input file does not exist: {input_file}")
-            return
-        
-        # Validate input file is readable
-        if not os.access(input_file, os.R_OK):
-            QMessageBox.warning(self, "Error", f"Cannot read input file: {input_file}")
-            return
-        
-        # Validate output directory exists and is writable
-        output_dir = os.path.dirname(output_file)
-        if output_dir and not os.path.exists(output_dir):
-            try:
-                os.makedirs(output_dir, exist_ok=True)
-            except Exception as e:
-                QMessageBox.warning(self, "Error", f"Cannot create output directory: {str(e)}")
-                return
-        
-        try:
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setRange(0, 0)  # Indeterminate progress
-            self.status_label.setText("Decrypting...")
-            
-            mode = self.control_panel.get_aes_mode()
-            iv = self.control_panel.iv
-            FileCrypto.decrypt_file(input_file, output_file, 
-                                   self.control_panel.key, mode, iv)
-            
-            self.progress_bar.setRange(0, 100)
-            self.progress_bar.setValue(100)
-            self.status_label.setText("Decryption complete")
-            
-            QMessageBox.information(self, "Success", "File decrypted successfully")
-            
-        except PermissionError as e:
-            self.progress_bar.setVisible(False)
-            self.status_label.setText("Decryption failed")
-            QMessageBox.critical(self, "Error", f"Permission denied: {str(e)}")
-        except FileNotFoundError as e:
-            self.progress_bar.setVisible(False)
-            self.status_label.setText("Decryption failed")
-            QMessageBox.critical(self, "Error", f"File not found: {str(e)}")
-        except OSError as e:
-            self.progress_bar.setVisible(False)
-            self.status_label.setText("Decryption failed")
-            QMessageBox.critical(self, "Error", f"System error: {str(e)}")
-        except Exception as e:
-            self.progress_bar.setVisible(False)
-            self.status_label.setText("Decryption failed")
-            QMessageBox.critical(self, "Error", f"Decryption failed: {str(e)}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            self.progress_bar.setVisible(False)
+        return input_file, output_file
 
 
 class AESMainWindow(QMainWindow):
